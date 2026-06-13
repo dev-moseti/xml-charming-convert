@@ -234,6 +234,60 @@ function ConverterPage() {
     log("ok", `↓ ${a.download} (${fmtBytes(blob.size)})`);
   };
 
+  const downloadCombined = () => {
+    const ready = jobs.filter((j) => j.csv && j.result);
+    if (!ready.length) {
+      toast.error("Nothing to combine");
+      return;
+    }
+    log("info", `merging ${ready.length} file(s) → single csv`);
+    // Union of all columns across files, prefixed with __source
+    const colSet = new Set<string>();
+    colSet.add("__source");
+    for (const j of ready) for (const c of j.result!.columns) colSet.add(c);
+    const columns = Array.from(colSet);
+
+    const esc = (v: string) => {
+      if (v == null) return "";
+      const s = String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+
+    const lines: string[] = [columns.map(esc).join(",")];
+    let total = 0;
+    for (const j of ready) {
+      for (const row of j.result!.rows) {
+        const merged: Record<string, string> = { __source: j.name, ...row };
+        lines.push(columns.map((c) => esc(merged[c] ?? "")).join(","));
+        total++;
+      }
+    }
+    const csv = lines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `xml2csv-combined-${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    ready.forEach((j) => update(j.id, { status: "converted" }));
+    setHistory((h) =>
+      [
+        {
+          id: crypto.randomUUID(),
+          name: a.download,
+          records: total,
+          columns: columns.length,
+          bytes: blob.size,
+          at: Date.now(),
+        },
+        ...h,
+      ].slice(0, 50),
+    );
+    log("ok", `↓ ${a.download} — ${FMT.format(total)} rows × ${columns.length} cols (${fmtBytes(blob.size)})`);
+    toast.success(`Combined ${ready.length} files → ${FMT.format(total)} rows`);
+  };
+
   const downloadZip = async () => {
     const ready = jobs.filter((j) => j.csv && j.result);
     if (!ready.length) {
