@@ -90,9 +90,10 @@ function ts(d = new Date()) {
 
 function ConverterPage() {
   const [jobs, setJobs] = useState<FileJob[]>([]);
-  const [logs, setLogs] = useState<LogEntry[]>([
-    { t: Date.now(), level: "info", msg: "xml2csv ready. drop XML files to begin." },
-  ]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  useEffect(() => {
+    setLogs([{ t: Date.now(), level: "info", msg: "xml2csv ready. drop XML files to begin." }]);
+  }, []);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [search, setSearch] = useState("");
   const [dragging, setDragging] = useState(false);
