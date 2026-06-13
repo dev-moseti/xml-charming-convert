@@ -450,6 +450,16 @@ function ConverterPage() {
               export zip ({stats.ready})
             </Button>
             <Button
+              variant="secondary"
+              size="sm"
+              onClick={downloadCombined}
+              disabled={stats.ready === 0}
+              className="gap-2"
+            >
+              <Combine className="size-4" />
+              merge csv ({stats.ready})
+            </Button>
+            <Button
               variant="outline"
               size="sm"
               onClick={clearAll}
