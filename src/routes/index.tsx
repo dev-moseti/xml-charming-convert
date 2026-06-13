@@ -17,6 +17,7 @@ import {
   X,
   Activity,
   Archive,
+  Combine,
   ChevronRight,
 } from "lucide-react";
 import { parseXmlToRows, rowsToCsv, type ParseResult } from "@/lib/xml-convert";
