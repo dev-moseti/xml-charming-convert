@@ -355,11 +355,11 @@ function ConverterPage() {
             </div>
             <div>
               <h1 className="text-base font-semibold tracking-tight">
-                <span className="text-primary">xml2csv</span>
-                <span className="text-muted-foreground">.sh</span>
+                <span className="text-primary">dev</span>
+                <span className="text-muted-foreground"> Moseti</span>
               </h1>
               <p className="text-[11px] text-muted-foreground">
-                enterprise xml → csv conversion // browser-native streaming
+                xml → csv conversion // browser-native streaming
               </p>
             </div>
           </div>
