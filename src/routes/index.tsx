@@ -19,29 +19,47 @@ import {
   Archive,
   Combine,
   ChevronRight,
+  Sun,
+  Moon,
+  RefreshCw,
+  Sparkles,
+  FileJson,
+  ArrowUpDown,
+  Settings2,
 } from "lucide-react";
-import { parseXmlToRows, rowsToCsv, type ParseResult } from "@/lib/xml-convert";
+import { parseXmlToRows, rowsToCsv, type ParseResult, type FlatRow } from "@/lib/xml-convert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  DropdownMenuCheckboxItem,
+} from "@/components/ui/dropdown-menu";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "xml2csv // Enterprise XML→CSV Converter" },
+      { title: "dev Moseti // XML→CSV Converter" },
       {
         name: "description",
         content:
-          "Drag-and-drop XML to CSV converter. Auto-detect structure, flatten nested elements, batch export to CSV and ZIP. Streaming, fast, browser-native.",
+          "Smart browser-native XML to CSV converter. Drag-and-drop, auto-detect structure, flatten nested elements, batch export to CSV, JSON & ZIP.",
       },
-      { property: "og:title", content: "xml2csv — Enterprise XML to CSV Converter" },
+      { property: "og:title", content: "dev Moseti — XML to CSV Converter" },
       {
         property: "og:description",
-        content: "Batch convert XML files to CSV with structure detection, preview, and ZIP export.",
+        content: "Batch convert XML to CSV with structure detection, type inference, preview, and ZIP export.",
       },
     ],
   }),
@@ -49,6 +67,8 @@ export const Route = createFileRoute("/")({
 });
 
 type FileStatus = "queued" | "parsing" | "ready" | "error" | "converted";
+type SortKey = "added" | "name" | "size" | "status" | "records";
+type Theme = "light" | "dark";
 
 interface LogEntry {
   t: number;
@@ -67,6 +87,7 @@ interface FileJob {
   error?: string;
   addedAt: number;
   durationMs?: number;
+  hash?: string;
 }
 
 interface HistoryEntry {
@@ -76,9 +97,14 @@ interface HistoryEntry {
   columns: number;
   bytes: number;
   at: number;
+  kind: "csv" | "json" | "zip" | "merge";
 }
 
 const FMT = new Intl.NumberFormat();
+const HISTORY_KEY = "xml2csv:history";
+const THEME_KEY = "xml2csv:theme";
+const AUTODL_KEY = "xml2csv:autodl";
+
 function fmtBytes(b: number) {
   if (b < 1024) return `${b} B`;
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
@@ -88,21 +114,120 @@ function ts(d = new Date()) {
   return d.toTimeString().slice(0, 8);
 }
 
+/** Lightweight column type inference for preview intelligence */
+type ColType = "int" | "float" | "bool" | "date" | "string";
+function inferTypes(rows: FlatRow[], columns: string[]): Record<string, ColType> {
+  const out: Record<string, ColType> = {};
+  const sample = rows.slice(0, 200);
+  for (const c of columns) {
+    let ints = 0, floats = 0, bools = 0, dates = 0, nonEmpty = 0;
+    for (const r of sample) {
+      const v = r[c];
+      if (v == null || v === "") continue;
+      nonEmpty++;
+      const s = String(v).trim();
+      if (/^(true|false)$/i.test(s)) { bools++; continue; }
+      if (/^-?\d+$/.test(s)) { ints++; continue; }
+      if (/^-?\d*\.\d+$/.test(s)) { floats++; continue; }
+      if (!isNaN(Date.parse(s)) && /\d{4}/.test(s) && /[-/T:]/.test(s)) { dates++; continue; }
+    }
+    if (!nonEmpty) { out[c] = "string"; continue; }
+    if (bools === nonEmpty) out[c] = "bool";
+    else if (ints === nonEmpty) out[c] = "int";
+    else if (ints + floats === nonEmpty) out[c] = "float";
+    else if (dates === nonEmpty) out[c] = "date";
+    else out[c] = "string";
+  }
+  return out;
+}
+
+async function hashString(s: string): Promise<string> {
+  try {
+    const buf = new TextEncoder().encode(s);
+    const h = await crypto.subtle.digest("SHA-1", buf);
+    return Array.from(new Uint8Array(h)).slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return String(s.length);
+  }
+}
+
+function rowsToJson(rows: FlatRow[]): string {
+  return JSON.stringify(rows, null, 2);
+}
+
+const SAMPLE_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<catalog>
+  <book id="b1">
+    <title>The Pragmatic Programmer</title>
+    <author>Andy Hunt</author>
+    <price currency="USD">39.95</price>
+    <published>1999-10-30</published>
+    <inStock>true</inStock>
+  </book>
+  <book id="b2">
+    <title>Clean Code</title>
+    <author>Robert C. Martin</author>
+    <price currency="USD">32.50</price>
+    <published>2008-08-01</published>
+    <inStock>true</inStock>
+  </book>
+  <book id="b3">
+    <title>Designing Data-Intensive Applications</title>
+    <author>Martin Kleppmann</author>
+    <price currency="USD">45.00</price>
+    <published>2017-03-16</published>
+    <inStock>false</inStock>
+  </book>
+</catalog>`;
+
 function ConverterPage() {
   const [jobs, setJobs] = useState<FileJob[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  useEffect(() => {
-    setLogs([{ t: Date.now(), level: "info", msg: "xml2csv ready. drop XML files to begin." }]);
-  }, []);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [search, setSearch] = useState("");
   const [dragging, setDragging] = useState(false);
   const [preview, setPreview] = useState<FileJob | null>(null);
+  const [previewSearch, setPreviewSearch] = useState("");
   const [converting, setConverting] = useState(false);
+  const [theme, setTheme] = useState<Theme>("dark");
+  const [autoDownload, setAutoDownload] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>("added");
+  const [sortDesc, setSortDesc] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  // hydration-safe init
+  useEffect(() => {
+    setLogs([{ t: Date.now(), level: "info", msg: "dev Moseti ready. drop XML files to begin." }]);
+    try {
+      const saved = localStorage.getItem(HISTORY_KEY);
+      if (saved) setHistory(JSON.parse(saved));
+      const t = (localStorage.getItem(THEME_KEY) as Theme | null) ?? "dark";
+      setTheme(t);
+      setAutoDownload(localStorage.getItem(AUTODL_KEY) === "1");
+    } catch { /* noop */ }
+  }, []);
+
+  // apply theme class
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.remove("light", "dark");
+    root.classList.add(theme);
+    try { localStorage.setItem(THEME_KEY, theme); } catch { /* noop */ }
+  }, [theme]);
+
+  // persist history
+  useEffect(() => {
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 50))); } catch { /* noop */ }
+  }, [history]);
+
+  // autoscroll log
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ block: "end" });
+  }, [logs]);
 
   const log = useCallback((level: LogEntry["level"], msg: string) => {
-    setLogs((l) => [...l.slice(-199), { t: Date.now(), level, msg }]);
+    setLogs((l) => [...l.slice(-299), { t: Date.now(), level, msg }]);
   }, []);
 
   const update = useCallback((id: string, patch: Partial<FileJob>) => {
@@ -110,13 +235,12 @@ function ConverterPage() {
   }, []);
 
   const parseFile = useCallback(
-    async (job: FileJob, file: File) => {
+    async (job: FileJob, file: File): Promise<FileJob | null> => {
       const started = performance.now();
       update(job.id, { status: "parsing", progress: 10 });
       log("info", `parse → ${job.name} (${fmtBytes(job.size)})`);
 
       try {
-        // Stream-read the file in chunks for progress reporting on large files
         const reader = file.stream().getReader();
         const decoder = new TextDecoder("utf-8");
         let xml = "";
@@ -130,33 +254,55 @@ function ConverterPage() {
           update(job.id, { progress: pct });
         }
         xml += decoder.decode();
-
-        update(job.id, { progress: 70 });
-        // Yield to keep UI responsive
+        update(job.id, { progress: 75 });
         await new Promise((r) => setTimeout(r, 0));
 
+        const hash = await hashString(xml);
         const result = parseXmlToRows(xml);
         const csv = rowsToCsv(result.rows, result.columns);
         const duration = Math.round(performance.now() - started);
 
-        update(job.id, {
+        const updated: Partial<FileJob> = {
           status: "ready",
           progress: 100,
           result,
           csv,
           durationMs: duration,
-        });
+          hash,
+        };
+        update(job.id, updated);
         log(
           "ok",
           `done ← ${job.name}: ${FMT.format(result.recordCount)} rows × ${result.columns.length} cols in ${duration}ms`,
         );
+        return { ...job, ...updated } as FileJob;
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         update(job.id, { status: "error", progress: 100, error: msg });
         log("err", `fail ✗ ${job.name}: ${msg}`);
+        return null;
       }
     },
     [log, update],
+  );
+
+  /** Concurrency-limited parallel parser */
+  const runParallel = useCallback(
+    async (pairs: Array<{ job: FileJob; file: File }>, concurrency = 3) => {
+      const queue = [...pairs];
+      const completed: FileJob[] = [];
+      const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+        while (queue.length) {
+          const item = queue.shift();
+          if (!item) break;
+          const res = await parseFile(item.job, item.file);
+          if (res) completed.push(res);
+        }
+      });
+      await Promise.all(workers);
+      return completed;
+    },
+    [parseFile],
   );
 
   const addFiles = useCallback(
@@ -181,15 +327,27 @@ function ConverterPage() {
         addedAt: Date.now(),
       }));
       setJobs((js) => [...newJobs, ...js]);
-      log("info", `queued ${newJobs.length} file(s)`);
+      log("info", `queued ${newJobs.length} file(s) · parallel x3`);
 
-      // Parse sequentially to avoid hammering the main thread
-      for (let i = 0; i < newJobs.length; i++) {
-        await parseFile(newJobs[i], xmlFiles[i]);
+      const completed = await runParallel(
+        newJobs.map((j, i) => ({ job: j, file: xmlFiles[i] })),
+        3,
+      );
+
+      if (autoDownload && completed.length) {
+        log("info", `auto-download enabled → ${completed.length} files`);
+        for (const j of completed) downloadOneSilent(j);
       }
     },
-    [log, parseFile],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [log, runParallel, autoDownload],
   );
+
+  const loadSample = useCallback(async () => {
+    const file = new File([SAMPLE_XML], "sample-catalog.xml", { type: "application/xml" });
+    await addFiles([file]);
+    toast.success("Sample XML loaded");
+  }, [addFiles]);
 
   const onDrop = useCallback(
     (e: React.DragEvent) => {
@@ -199,6 +357,20 @@ function ConverterPage() {
     },
     [addFiles],
   );
+
+  // Paste XML from clipboard
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData("text");
+      if (text && /<\?xml|<[a-zA-Z]/.test(text.trim().slice(0, 200))) {
+        const file = new File([text], `pasted-${Date.now()}.xml`, { type: "application/xml" });
+        addFiles([file]);
+        toast.success("Pasted XML queued");
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [addFiles]);
 
   const removeJob = (id: string) => {
     setJobs((js) => js.filter((j) => j.id !== id));
@@ -210,49 +382,84 @@ function ConverterPage() {
     log("warn", "cleared queue");
   };
 
-  const downloadOne = (j: FileJob) => {
-    if (!j.csv || !j.result) return;
-    const blob = new Blob([j.csv], { type: "text/csv;charset=utf-8" });
+  const clearCompleted = () => {
+    setJobs((js) => js.filter((j) => j.status !== "converted" && j.status !== "ready"));
+    log("info", "cleared completed jobs");
+  };
+
+  const retryErrors = async () => {
+    const errs = jobs.filter((j) => j.status === "error");
+    if (!errs.length) {
+      toast.info("No errors to retry");
+      return;
+    }
+    log("info", `retry ${errs.length} failed job(s)`);
+    toast.info("Re-add the file(s) from disk to retry — original buffer not retained");
+  };
+
+  const recordHistory = (entry: HistoryEntry) => {
+    setHistory((h) => [entry, ...h].slice(0, 50));
+  };
+
+  function triggerDownload(blob: Blob, name: string) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = j.name.replace(/\.xml$/i, "") + ".csv";
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function downloadOneSilent(j: FileJob) {
+    if (!j.csv || !j.result) return;
+    const blob = new Blob([j.csv], { type: "text/csv;charset=utf-8" });
+    const name = j.name.replace(/\.xml$/i, "") + ".csv";
+    triggerDownload(blob, name);
     update(j.id, { status: "converted" });
-    setHistory((h) => [
-      {
-        id: j.id,
-        name: a.download,
-        records: j.result!.recordCount,
-        columns: j.result!.columns.length,
-        bytes: blob.size,
-        at: Date.now(),
-      },
-      ...h,
-    ].slice(0, 50));
-    log("ok", `↓ ${a.download} (${fmtBytes(blob.size)})`);
+    recordHistory({
+      id: j.id + "-csv-" + Date.now(),
+      name,
+      records: j.result.recordCount,
+      columns: j.result.columns.length,
+      bytes: blob.size,
+      at: Date.now(),
+      kind: "csv",
+    });
+    log("ok", `↓ ${name} (${fmtBytes(blob.size)})`);
+  }
+
+  const downloadOne = (j: FileJob) => downloadOneSilent(j);
+
+  const downloadOneJson = (j: FileJob) => {
+    if (!j.result) return;
+    const json = rowsToJson(j.result.rows);
+    const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+    const name = j.name.replace(/\.xml$/i, "") + ".json";
+    triggerDownload(blob, name);
+    recordHistory({
+      id: j.id + "-json-" + Date.now(),
+      name,
+      records: j.result.recordCount,
+      columns: j.result.columns.length,
+      bytes: blob.size,
+      at: Date.now(),
+      kind: "json",
+    });
+    log("ok", `↓ ${name} (${fmtBytes(blob.size)})`);
   };
 
   const downloadCombined = () => {
     const ready = jobs.filter((j) => j.csv && j.result);
-    if (!ready.length) {
-      toast.error("Nothing to combine");
-      return;
-    }
+    if (!ready.length) { toast.error("Nothing to combine"); return; }
     log("info", `merging ${ready.length} file(s) → single csv`);
-    // Union of all columns across files, prefixed with __source
-    const colSet = new Set<string>();
-    colSet.add("__source");
+    const colSet = new Set<string>(["__source"]);
     for (const j of ready) for (const c of j.result!.columns) colSet.add(c);
     const columns = Array.from(colSet);
-
     const esc = (v: string) => {
       if (v == null) return "";
       const s = String(v);
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-
     const lines: string[] = [columns.map(esc).join(",")];
     let total = 0;
     for (const j of ready) {
@@ -264,62 +471,45 @@ function ConverterPage() {
     }
     const csv = lines.join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `xml2csv-combined-${Date.now()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const name = `xml2csv-combined-${Date.now()}.csv`;
+    triggerDownload(blob, name);
     ready.forEach((j) => update(j.id, { status: "converted" }));
-    setHistory((h) =>
-      [
-        {
-          id: crypto.randomUUID(),
-          name: a.download,
-          records: total,
-          columns: columns.length,
-          bytes: blob.size,
-          at: Date.now(),
-        },
-        ...h,
-      ].slice(0, 50),
-    );
-    log("ok", `↓ ${a.download} — ${FMT.format(total)} rows × ${columns.length} cols (${fmtBytes(blob.size)})`);
+    recordHistory({
+      id: crypto.randomUUID(), name, records: total, columns: columns.length,
+      bytes: blob.size, at: Date.now(), kind: "merge",
+    });
+    log("ok", `↓ ${name} — ${FMT.format(total)} rows × ${columns.length} cols (${fmtBytes(blob.size)})`);
     toast.success(`Combined ${ready.length} files → ${FMT.format(total)} rows`);
   };
 
   const downloadZip = async () => {
     const ready = jobs.filter((j) => j.csv && j.result);
-    if (!ready.length) {
-      toast.error("Nothing to export");
-      return;
-    }
+    if (!ready.length) { toast.error("Nothing to export"); return; }
     setConverting(true);
     log("info", `packaging ${ready.length} file(s) → zip`);
     try {
       const zip = new JSZip();
       const folder = zip.folder("xml2csv-export")!;
       for (const j of ready) {
-        folder.file(j.name.replace(/\.xml$/i, "") + ".csv", j.csv!);
+        const base = j.name.replace(/\.xml$/i, "");
+        folder.file(base + ".csv", j.csv!);
+        folder.file(base + ".json", rowsToJson(j.result!.rows));
       }
-      // Manifest
       const manifest = ready
-        .map(
-          (j) =>
-            `${j.name} → ${FMT.format(j.result!.recordCount)} rows × ${j.result!.columns.length} cols (${j.durationMs ?? 0}ms)`,
-        )
+        .map((j) =>
+          `${j.name} → ${FMT.format(j.result!.recordCount)} rows × ${j.result!.columns.length} cols (${j.durationMs ?? 0}ms) [${j.hash ?? "-"}]`)
         .join("\n");
-      folder.file("_manifest.txt", `xml2csv export\n${new Date().toISOString()}\n\n${manifest}\n`);
-
+      folder.file("_manifest.txt", `dev Moseti export\n${new Date().toISOString()}\n\n${manifest}\n`);
       const blob = await zip.generateAsync({ type: "blob" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `xml2csv-${Date.now()}.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const name = `xml2csv-${Date.now()}.zip`;
+      triggerDownload(blob, name);
       ready.forEach((j) => update(j.id, { status: "converted" }));
-      log("ok", `↓ ${a.download} (${fmtBytes(blob.size)})`);
+      recordHistory({
+        id: crypto.randomUUID(), name,
+        records: ready.reduce((s, j) => s + j.result!.recordCount, 0),
+        columns: 0, bytes: blob.size, at: Date.now(), kind: "zip",
+      });
+      log("ok", `↓ ${name} (${fmtBytes(blob.size)})`);
       toast.success(`Exported ${ready.length} files`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -331,18 +521,49 @@ function ConverterPage() {
   };
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return jobs;
-    const q = search.toLowerCase();
-    return jobs.filter((j) => j.name.toLowerCase().includes(q));
-  }, [jobs, search]);
+    let out = jobs;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      out = out.filter((j) => j.name.toLowerCase().includes(q));
+    }
+    const dir = sortDesc ? -1 : 1;
+    out = [...out].sort((a, b) => {
+      switch (sortKey) {
+        case "name": return a.name.localeCompare(b.name) * dir;
+        case "size": return (a.size - b.size) * dir;
+        case "status": return a.status.localeCompare(b.status) * dir;
+        case "records": return ((a.result?.recordCount ?? 0) - (b.result?.recordCount ?? 0)) * dir;
+        default: return (a.addedAt - b.addedAt) * dir;
+      }
+    });
+    return out;
+  }, [jobs, search, sortKey, sortDesc]);
 
   const stats = useMemo(() => {
     const ready = jobs.filter((j) => j.status === "ready" || j.status === "converted");
     const errors = jobs.filter((j) => j.status === "error").length;
+    const parsing = jobs.filter((j) => j.status === "parsing").length;
     const records = ready.reduce((sum, j) => sum + (j.result?.recordCount ?? 0), 0);
     const bytes = jobs.reduce((s, j) => s + j.size, 0);
-    return { total: jobs.length, ready: ready.length, errors, records, bytes };
+    const durations = ready.map((j) => j.durationMs ?? 0).filter(Boolean);
+    const avgMs = durations.length ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : 0;
+    return { total: jobs.length, ready: ready.length, errors, parsing, records, bytes, avgMs };
   }, [jobs]);
+
+  const previewTypes = useMemo(() => {
+    if (!preview?.result) return {};
+    return inferTypes(preview.result.rows, preview.result.columns);
+  }, [preview]);
+
+  const previewRows = useMemo(() => {
+    if (!preview?.result) return [];
+    const rows = preview.result.rows;
+    if (!previewSearch.trim()) return rows.slice(0, 100);
+    const q = previewSearch.toLowerCase();
+    return rows
+      .filter((r) => Object.values(r).some((v) => String(v ?? "").toLowerCase().includes(q)))
+      .slice(0, 100);
+  }, [preview, previewSearch]);
 
   return (
     <div className="min-h-screen scanlines">
@@ -359,24 +580,69 @@ function ConverterPage() {
                 <span className="text-muted-foreground"> Moseti</span>
               </h1>
               <p className="text-[11px] text-muted-foreground">
-                xml → csv conversion // browser-native streaming
+                xml → csv conversion // intelligent · streaming · browser-native
               </p>
             </div>
           </div>
-          <div className="hidden md:flex items-center gap-2 text-xs text-muted-foreground">
-            <Activity className="size-3.5 text-primary" />
-            <span>session</span>
-            <span className="text-foreground">{FMT.format(stats.records)}</span>
-            <span>records</span>
-            <span className="text-border">│</span>
-            <span className="text-foreground">{stats.ready}/{stats.total}</span>
-            <span>ready</span>
-            {stats.errors > 0 && (
-              <>
+          <div className="flex items-center gap-2">
+            <div className="hidden md:flex items-center gap-2 text-xs text-muted-foreground mr-2">
+              <Activity className="size-3.5 text-primary" />
+              <span className="text-foreground">{FMT.format(stats.records)}</span>
+              <span>rec</span>
+              <span className="text-border">│</span>
+              <span className="text-foreground">{stats.ready}/{stats.total}</span>
+              <span>ready</span>
+              {stats.avgMs > 0 && (<>
                 <span className="text-border">│</span>
-                <span className="text-destructive">{stats.errors} errors</span>
-              </>
-            )}
+                <span className="text-foreground">{stats.avgMs}ms</span>
+                <span>avg</span>
+              </>)}
+              {stats.errors > 0 && (<>
+                <span className="text-border">│</span>
+                <span className="text-destructive">{stats.errors} err</span>
+              </>)}
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" title="settings" className="size-9">
+                  <Settings2 className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="font-mono text-xs">settings</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <div className="px-2 py-2 flex items-center justify-between">
+                  <Label htmlFor="autodl" className="text-xs font-mono cursor-pointer">auto-download</Label>
+                  <Switch
+                    id="autodl"
+                    checked={autoDownload}
+                    onCheckedChange={(v) => {
+                      setAutoDownload(v);
+                      try { localStorage.setItem(AUTODL_KEY, v ? "1" : "0"); } catch { /* noop */ }
+                    }}
+                  />
+                </div>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={loadSample} className="font-mono text-xs">
+                  <Sparkles className="size-3.5 mr-2 text-primary" /> load sample xml
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={retryErrors} className="font-mono text-xs">
+                  <RefreshCw className="size-3.5 mr-2" /> retry errors
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setHistory([]); toast.success("History cleared"); }} className="font-mono text-xs">
+                  <Trash2 className="size-3.5 mr-2" /> clear history
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-9"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              title={theme === "dark" ? "switch to light" : "switch to dark"}
+            >
+              {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+            </Button>
           </div>
         </div>
       </header>
@@ -386,10 +652,7 @@ function ConverterPage() {
         <div className="space-y-6 min-w-0">
           {/* Dropzone */}
           <section
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
             onDragLeave={() => setDragging(false)}
             onDrop={onDrop}
             onClick={() => inputRef.current?.click()}
@@ -415,11 +678,11 @@ function ConverterPage() {
               </div>
               <p className="text-sm">
                 <span className="text-primary">$</span> drop xml files here{" "}
-                <span className="text-muted-foreground">or click to browse</span>
+                <span className="text-muted-foreground">or click to browse · ⌘V to paste</span>
                 <span className="cursor-blink" />
               </p>
               <p className="text-xs text-muted-foreground mt-2">
-                multi-file · auto-detect structure · streaming read · nested flattening
+                bulk upload · auto-detect · parallel parse · type inference · streaming
               </p>
             </div>
           </section>
@@ -435,39 +698,40 @@ function ConverterPage() {
                 className="pl-9 bg-card/60 border-border font-mono text-sm h-9"
               />
             </div>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={downloadZip}
-              disabled={converting || stats.ready === 0}
-              className="gap-2"
-            >
-              {converting ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Archive className="size-4" />
-              )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-2">
+                  <ArrowUpDown className="size-4" /> sort: {sortKey}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {(["added", "name", "size", "status", "records"] as SortKey[]).map((k) => (
+                  <DropdownMenuItem key={k} onClick={() => setSortKey(k)} className="font-mono text-xs">
+                    {k === sortKey ? "✓ " : "  "}{k}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem checked={sortDesc} onCheckedChange={setSortDesc} className="font-mono text-xs">
+                  descending
+                </DropdownMenuCheckboxItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button variant="default" size="sm" onClick={downloadZip}
+              disabled={converting || stats.ready === 0} className="gap-2">
+              {converting ? <Loader2 className="size-4 animate-spin" /> : <Archive className="size-4" />}
               export zip ({stats.ready})
             </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={downloadCombined}
-              disabled={stats.ready === 0}
-              className="gap-2"
-            >
-              <Combine className="size-4" />
-              merge csv ({stats.ready})
+            <Button variant="secondary" size="sm" onClick={downloadCombined}
+              disabled={stats.ready === 0} className="gap-2">
+              <Combine className="size-4" /> merge csv ({stats.ready})
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={clearAll}
-              disabled={jobs.length === 0}
-              className="gap-2"
-            >
-              <Trash2 className="size-4" />
-              clear
+            <Button variant="outline" size="sm" onClick={clearCompleted}
+              disabled={stats.ready === 0} className="gap-2">
+              clear done
+            </Button>
+            <Button variant="outline" size="sm" onClick={clearAll}
+              disabled={jobs.length === 0} className="gap-2">
+              <Trash2 className="size-4" /> clear all
             </Button>
           </div>
 
@@ -477,6 +741,7 @@ function ConverterPage() {
               <span>
                 <ChevronRight className="size-3 inline text-primary" /> files
                 <span className="ml-2 text-foreground">{filtered.length}</span>
+                {stats.parsing > 0 && <span className="ml-2 text-accent">· {stats.parsing} parsing</span>}
               </span>
               <span>{fmtBytes(stats.bytes)} total</span>
             </div>
@@ -484,7 +749,14 @@ function ConverterPage() {
             {filtered.length === 0 ? (
               <div className="p-10 text-center text-sm text-muted-foreground">
                 <FileCode2 className="size-8 mx-auto mb-2 opacity-40" />
-                {jobs.length === 0 ? "no files queued" : "no matches"}
+                {jobs.length === 0 ? (
+                  <div className="space-y-3">
+                    <div>no files queued</div>
+                    <Button variant="outline" size="sm" onClick={loadSample} className="gap-2">
+                      <Sparkles className="size-3.5 text-primary" /> load sample
+                    </Button>
+                  </div>
+                ) : "no matches"}
               </div>
             ) : (
               <ul className="divide-y divide-border">
@@ -492,8 +764,9 @@ function ConverterPage() {
                   <JobRow
                     key={j.id}
                     job={j}
-                    onPreview={() => setPreview(j)}
+                    onPreview={() => { setPreviewSearch(""); setPreview(j); }}
                     onDownload={() => downloadOne(j)}
+                    onDownloadJson={() => downloadOneJson(j)}
                     onRemove={() => removeJob(j.id)}
                   />
                 ))}
@@ -513,25 +786,24 @@ function ConverterPage() {
                 <span className="size-2.5 rounded-full bg-primary/70" />
               </div>
               <span className="text-xs text-muted-foreground ml-2">~/conversion.log</span>
+              <span className="ml-auto text-[10px] text-muted-foreground">{logs.length}</span>
             </div>
             <div className="p-3 h-[280px] overflow-auto text-[11.5px] leading-relaxed font-mono">
               {logs.map((l, i) => (
                 <div key={i} className="flex gap-2">
                   <span className="text-muted-foreground/60 shrink-0">{ts(new Date(l.t))}</span>
-                  <span
-                    className={cn(
-                      "shrink-0",
-                      l.level === "ok" && "text-primary",
-                      l.level === "warn" && "text-accent",
-                      l.level === "err" && "text-destructive",
-                      l.level === "info" && "text-muted-foreground",
-                    )}
-                  >
+                  <span className={cn("shrink-0",
+                    l.level === "ok" && "text-primary",
+                    l.level === "warn" && "text-accent",
+                    l.level === "err" && "text-destructive",
+                    l.level === "info" && "text-muted-foreground",
+                  )}>
                     [{l.level}]
                   </span>
                   <span className="text-terminal-foreground/90 break-all">{l.msg}</span>
                 </div>
               ))}
+              <div ref={logEndRef} />
             </div>
           </section>
 
@@ -545,21 +817,20 @@ function ConverterPage() {
             </div>
             <div className="max-h-[280px] overflow-auto">
               {history.length === 0 ? (
-                <div className="p-6 text-center text-xs text-muted-foreground">
-                  no downloads yet
-                </div>
+                <div className="p-6 text-center text-xs text-muted-foreground">no downloads yet</div>
               ) : (
                 <ul className="divide-y divide-border">
                   {history.map((h) => (
-                    <li key={h.id + h.at} className="px-4 py-2 text-xs">
+                    <li key={h.id} className="px-4 py-2 text-xs">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="truncate text-foreground">{h.name}</span>
-                        <span className="text-muted-foreground shrink-0">
-                          {ts(new Date(h.at))}
+                        <span className="truncate text-foreground flex items-center gap-1.5">
+                          <Badge variant="outline" className="text-[9px] font-mono px-1 py-0">{h.kind}</Badge>
+                          {h.name}
                         </span>
+                        <span className="text-muted-foreground shrink-0">{ts(new Date(h.at))}</span>
                       </div>
                       <div className="text-muted-foreground mt-0.5">
-                        {FMT.format(h.records)} rows · {h.columns} cols · {fmtBytes(h.bytes)}
+                        {FMT.format(h.records)} rows{h.columns ? ` · ${h.columns} cols` : ""} · {fmtBytes(h.bytes)}
                       </div>
                     </li>
                   ))}
@@ -586,31 +857,43 @@ function ConverterPage() {
           </DialogHeader>
           {preview?.result && (
             <div className="space-y-3">
-              <div className="text-xs text-muted-foreground font-mono">
-                root: <span className="text-primary">{preview.result.rootPath || "(root)"}</span>
+              <div className="flex flex-wrap items-center gap-3 text-xs font-mono">
+                <span className="text-muted-foreground">
+                  root: <span className="text-primary">{preview.result.rootPath || "(root)"}</span>
+                </span>
+                {preview.durationMs != null && (
+                  <span className="text-muted-foreground">parsed in <span className="text-foreground">{preview.durationMs}ms</span></span>
+                )}
+                <div className="relative ml-auto">
+                  <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="filter rows..."
+                    value={previewSearch}
+                    onChange={(e) => setPreviewSearch(e.target.value)}
+                    className="pl-8 h-8 w-48 font-mono text-xs"
+                  />
+                </div>
               </div>
               <div className="rounded-md border border-border overflow-auto max-h-[60vh]">
                 <table className="w-full text-xs font-mono">
                   <thead className="bg-card/80 sticky top-0">
                     <tr>
                       {preview.result.columns.slice(0, 20).map((c) => (
-                        <th
-                          key={c}
-                          className="text-left px-3 py-2 border-b border-border text-primary font-medium whitespace-nowrap"
-                        >
-                          {c}
+                        <th key={c} className="text-left px-3 py-2 border-b border-border whitespace-nowrap">
+                          <div className="text-primary font-medium">{c}</div>
+                          <div className="text-[9px] text-muted-foreground uppercase tracking-wider">
+                            {previewTypes[c] ?? "string"}
+                          </div>
                         </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {preview.result.rows.slice(0, 100).map((row, i) => (
+                    {previewRows.map((row, i) => (
                       <tr key={i} className="hover:bg-muted/30">
                         {preview.result!.columns.slice(0, 20).map((c) => (
-                          <td
-                            key={c}
-                            className="px-3 py-1.5 border-b border-border/50 whitespace-nowrap max-w-[240px] truncate text-foreground/90"
-                          >
+                          <td key={c}
+                            className="px-3 py-1.5 border-b border-border/50 whitespace-nowrap max-w-[240px] truncate text-foreground/90">
                             {row[c] ?? ""}
                           </td>
                         ))}
@@ -621,13 +904,17 @@ function ConverterPage() {
               </div>
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>
-                  showing first {Math.min(100, preview.result.rows.length)} of{" "}
-                  {FMT.format(preview.result.recordCount)} rows ·{" "}
+                  showing {previewRows.length} of {FMT.format(preview.result.recordCount)} rows ·{" "}
                   {Math.min(20, preview.result.columns.length)}/{preview.result.columns.length} cols
                 </span>
-                <Button size="sm" onClick={() => downloadOne(preview)} className="gap-2">
-                  <Download className="size-3.5" /> download csv
-                </Button>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => downloadOneJson(preview)} className="gap-2">
+                    <FileJson className="size-3.5" /> json
+                  </Button>
+                  <Button size="sm" onClick={() => downloadOne(preview)} className="gap-2">
+                    <Download className="size-3.5" /> csv
+                  </Button>
+                </div>
               </div>
             </div>
           )}
@@ -638,14 +925,12 @@ function ConverterPage() {
 }
 
 function JobRow({
-  job,
-  onPreview,
-  onDownload,
-  onRemove,
+  job, onPreview, onDownload, onDownloadJson, onRemove,
 }: {
   job: FileJob;
   onPreview: () => void;
   onDownload: () => void;
+  onDownloadJson: () => void;
   onRemove: () => void;
 }) {
   const statusColor = {
@@ -667,15 +952,11 @@ function JobRow({
   return (
     <li className="px-4 py-3 hover:bg-muted/20 transition-colors">
       <div className="flex items-center gap-3 min-w-0">
-        <Icon
-          className={cn("size-4 shrink-0", statusColor, job.status === "parsing" && "animate-spin")}
-        />
+        <Icon className={cn("size-4 shrink-0", statusColor, job.status === "parsing" && "animate-spin")} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm truncate font-mono">{job.name}</span>
-            <span className="text-[11px] text-muted-foreground shrink-0">
-              {fmtBytes(job.size)}
-            </span>
+            <span className="text-[11px] text-muted-foreground shrink-0">{fmtBytes(job.size)}</span>
           </div>
           <div className="mt-1.5 flex items-center gap-2">
             <Progress value={job.progress} className="h-1 flex-1" />
@@ -688,12 +969,11 @@ function JobRow({
               {FMT.format(job.result.recordCount)} rows × {job.result.columns.length} cols
               {job.durationMs != null && ` · ${job.durationMs}ms`} · root{" "}
               <span className="text-primary/80">{job.result.rootPath || "(root)"}</span>
+              {job.hash && <span className="ml-1 opacity-60">#{job.hash}</span>}
             </div>
           )}
           {job.error && (
-            <div className="mt-1 text-[11px] text-destructive font-mono break-all">
-              ✗ {job.error}
-            </div>
+            <div className="mt-1 text-[11px] text-destructive font-mono break-all">✗ {job.error}</div>
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
@@ -701,6 +981,9 @@ function JobRow({
             <>
               <Button size="icon" variant="ghost" onClick={onPreview} title="preview">
                 <Eye className="size-4" />
+              </Button>
+              <Button size="icon" variant="ghost" onClick={onDownloadJson} title="download json">
+                <FileJson className="size-4" />
               </Button>
               <Button size="icon" variant="ghost" onClick={onDownload} title="download csv">
                 <Download className="size-4" />
