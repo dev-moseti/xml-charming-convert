@@ -358,6 +358,35 @@ function ConverterPage() {
     toast.success("Sample XML loaded");
   }, [addFiles]);
 
+  const fetchFromUrl = useCallback(async () => {
+    const url = urlValue.trim();
+    if (!url) return;
+    setUrlLoading(true);
+    log("info", `GET ${url}`);
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      if (!/<\?xml|<[a-zA-Z]/.test(text.trim().slice(0, 200))) {
+        throw new Error("response does not look like XML");
+      }
+      const name = url.split("/").pop()?.split("?")[0] || `fetched-${Date.now()}.xml`;
+      const safe = name.toLowerCase().endsWith(".xml") ? name : `${name}.xml`;
+      const file = new File([text], safe, { type: "application/xml" });
+      await addFiles([file]);
+      toast.success(`Fetched ${safe}`);
+      setUrlOpen(false);
+      setUrlValue("");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log("err", `fetch failed: ${msg}`);
+      toast.error(`Fetch failed: ${msg}`);
+    } finally {
+      setUrlLoading(false);
+    }
+  }, [urlValue, addFiles, log]);
+
+
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
