@@ -1030,12 +1030,14 @@ function ConverterPage() {
 }
 
 function JobRow({
-  job, onPreview, onDownload, onDownloadJson, onRemove,
+  job, onPreview, onDownload, onDownloadJson, onDownloadTsv, onCopy, onRemove,
 }: {
   job: FileJob;
   onPreview: () => void;
   onDownload: () => void;
   onDownloadJson: () => void;
+  onDownloadTsv: () => void;
+  onCopy: () => void;
   onRemove: () => void;
 }) {
   const statusColor = {
@@ -1086,6 +1088,12 @@ function JobRow({
             <>
               <Button size="icon" variant="ghost" onClick={onPreview} title="preview">
                 <Eye className="size-4" />
+              </Button>
+              <Button size="icon" variant="ghost" onClick={onCopy} title="copy csv to clipboard">
+                <Copy className="size-4" />
+              </Button>
+              <Button size="icon" variant="ghost" onClick={onDownloadTsv} title="download tsv">
+                <FileText className="size-4" />
               </Button>
               <Button size="icon" variant="ghost" onClick={onDownloadJson} title="download json">
                 <FileJson className="size-4" />
