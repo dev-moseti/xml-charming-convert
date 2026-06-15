@@ -782,7 +782,7 @@ function ConverterPage() {
                 <span className="cursor-blink" />
               </p>
               <p className="text-xs text-muted-foreground mt-2">
-                bulk upload · auto-detect · parallel parse · type inference · streaming
+                bulk upload · auto-detect · parallel parse · type inference · streaming · press <span className="text-primary">?</span> for shortcuts
               </p>
             </div>
           </section>
