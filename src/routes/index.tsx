@@ -410,6 +410,26 @@ function ConverterPage() {
     return () => window.removeEventListener("paste", onPaste);
   }, [addFiles]);
 
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "?" || (e.shiftKey && e.key === "/")) {
+        e.preventDefault();
+        setShortcutsOpen((s) => !s);
+      } else if (e.key.toLowerCase() === "u" && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        inputRef.current?.click();
+      } else if (e.key.toLowerCase() === "l" && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setUrlOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const removeJob = (id: string) => {
     setJobs((js) => js.filter((j) => j.id !== id));
     log("info", `removed job ${id.slice(0, 8)}`);
