@@ -720,11 +720,20 @@ function ConverterPage() {
                 <DropdownMenuItem onClick={retryErrors} className="font-mono text-xs">
                   <RefreshCw className="size-3.5 mr-2" /> retry errors
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setShortcutsOpen(true)} className="font-mono text-xs">
+                  <Keyboard className="size-3.5 mr-2" /> keyboard shortcuts
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild className="font-mono text-xs">
+                  <Link to="/about"><Info className="size-3.5 mr-2" /> about / features</Link>
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => { setHistory([]); toast.success("History cleared"); }} className="font-mono text-xs">
                   <Trash2 className="size-3.5 mr-2" /> clear history
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <Button asChild variant="outline" size="icon" className="size-9" title="about">
+              <Link to="/about"><Info className="size-4" /></Link>
+            </Button>
             <Button
               variant="outline"
               size="icon"
