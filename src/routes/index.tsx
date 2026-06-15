@@ -1025,6 +1025,65 @@ function ConverterPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Fetch URL dialog */}
+      <Dialog open={urlOpen} onOpenChange={setUrlOpen}>
+        <DialogContent className="max-w-lg bg-card border-border">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm font-mono">
+              <Link2 className="size-4 text-primary" /> fetch xml from url
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Paste an http(s) URL pointing to an XML feed, sitemap, or RSS.
+            </p>
+            <Input
+              autoFocus
+              placeholder="https://example.com/feed.xml"
+              value={urlValue}
+              onChange={(e) => setUrlValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") fetchFromUrl(); }}
+              className="font-mono text-xs"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setUrlOpen(false)}>cancel</Button>
+              <Button size="sm" onClick={fetchFromUrl} disabled={urlLoading || !urlValue.trim()} className="gap-2">
+                {urlLoading ? <Loader2 className="size-4 animate-spin" /> : <Link2 className="size-4" />}
+                fetch
+              </Button>
+            </div>
+            <p className="text-[10px] text-muted-foreground font-mono">
+              note: the remote server must allow CORS, otherwise the browser blocks the request.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Keyboard shortcuts dialog */}
+      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent className="max-w-md bg-card border-border">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm font-mono">
+              <Keyboard className="size-4 text-primary" /> keyboard shortcuts
+            </DialogTitle>
+          </DialogHeader>
+          <ul className="text-xs font-mono space-y-2">
+            {[
+              ["U", "open file picker"],
+              ["L", "fetch from URL"],
+              ["⌘V / Ctrl+V", "paste XML from clipboard"],
+              ["?", "toggle this shortcut sheet"],
+              ["Esc", "close dialog"],
+            ].map(([k, d]) => (
+              <li key={k} className="flex items-center justify-between gap-3 border-b border-border/50 pb-2 last:border-0">
+                <kbd className="px-2 py-1 rounded bg-muted text-foreground border border-border text-[11px]">{k}</kbd>
+                <span className="text-muted-foreground">{d}</span>
+              </li>
+            ))}
+          </ul>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
