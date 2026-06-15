@@ -1013,6 +1013,12 @@ function ConverterPage() {
                   {Math.min(20, preview.result.columns.length)}/{preview.result.columns.length} cols
                 </span>
                 <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => copyCsv(preview)} className="gap-2">
+                    <Copy className="size-3.5" /> copy
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => downloadOneTsv(preview)} className="gap-2">
+                    <FileText className="size-3.5" /> tsv
+                  </Button>
                   <Button size="sm" variant="outline" onClick={() => downloadOneJson(preview)} className="gap-2">
                     <FileJson className="size-3.5" /> json
                   </Button>
