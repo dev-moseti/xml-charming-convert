@@ -26,6 +26,11 @@ import {
   FileJson,
   ArrowUpDown,
   Settings2,
+  Link2,
+  Copy,
+  Keyboard,
+  Info,
+  FileText,
 } from "lucide-react";
 import { parseXmlToRows, rowsToCsv, type ParseResult, type FlatRow } from "@/lib/xml-convert";
 import { Button } from "@/components/ui/button";
