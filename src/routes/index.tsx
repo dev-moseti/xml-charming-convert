@@ -486,6 +486,39 @@ function ConverterPage() {
     log("ok", `↓ ${name} (${fmtBytes(blob.size)})`);
   };
 
+  const downloadOneTsv = (j: FileJob) => {
+    if (!j.result) return;
+    const cols = j.result.columns;
+    const escTsv = (v: string) =>
+      (v ?? "").toString().replace(/\t/g, " ").replace(/\r?\n/g, " ");
+    const lines = [cols.map(escTsv).join("\t")];
+    for (const r of j.result.rows) lines.push(cols.map((c) => escTsv(r[c] ?? "")).join("\t"));
+    const blob = new Blob([lines.join("\n")], { type: "text/tab-separated-values;charset=utf-8" });
+    const name = j.name.replace(/\.xml$/i, "") + ".tsv";
+    triggerDownload(blob, name);
+    recordHistory({
+      id: j.id + "-tsv-" + Date.now(),
+      name,
+      records: j.result.recordCount,
+      columns: cols.length,
+      bytes: blob.size,
+      at: Date.now(),
+      kind: "csv",
+    });
+    log("ok", `↓ ${name} (${fmtBytes(blob.size)})`);
+  };
+
+  const copyCsv = async (j: FileJob) => {
+    if (!j.csv) return;
+    try {
+      await navigator.clipboard.writeText(j.csv);
+      toast.success(`Copied ${j.name.replace(/\.xml$/i, "")}.csv to clipboard`);
+      log("ok", `clipboard ← ${j.name}`);
+    } catch {
+      toast.error("Clipboard unavailable");
+    }
+  };
+
   const downloadCombined = () => {
     const ready = jobs.filter((j) => j.csv && j.result);
     if (!ready.length) { toast.error("Nothing to combine"); return; }
