@@ -198,6 +198,10 @@ function ConverterPage() {
   const [autoDownload, setAutoDownload] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("added");
   const [sortDesc, setSortDesc] = useState(true);
+  const [urlOpen, setUrlOpen] = useState(false);
+  const [urlValue, setUrlValue] = useState("");
+  const [urlLoading, setUrlLoading] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
