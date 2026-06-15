@@ -816,6 +816,9 @@ function ConverterPage() {
                 </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <Button variant="outline" size="sm" onClick={() => setUrlOpen(true)} className="gap-2">
+              <Link2 className="size-4" /> fetch url
+            </Button>
             <Button variant="default" size="sm" onClick={downloadZip}
               disabled={converting || stats.ready === 0} className="gap-2">
               {converting ? <Loader2 className="size-4 animate-spin" /> : <Archive className="size-4" />}
