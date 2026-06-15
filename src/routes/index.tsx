@@ -870,6 +870,8 @@ function ConverterPage() {
                     onPreview={() => { setPreviewSearch(""); setPreview(j); }}
                     onDownload={() => downloadOne(j)}
                     onDownloadJson={() => downloadOneJson(j)}
+                    onDownloadTsv={() => downloadOneTsv(j)}
+                    onCopy={() => copyCsv(j)}
                     onRemove={() => removeJob(j.id)}
                   />
                 ))}
