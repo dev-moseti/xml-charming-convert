@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
 import {
@@ -26,6 +26,11 @@ import {
   FileJson,
   ArrowUpDown,
   Settings2,
+  Link2,
+  Copy,
+  Keyboard,
+  Info,
+  FileText,
 } from "lucide-react";
 import { parseXmlToRows, rowsToCsv, type ParseResult, type FlatRow } from "@/lib/xml-convert";
 import { Button } from "@/components/ui/button";
@@ -193,6 +198,10 @@ function ConverterPage() {
   const [autoDownload, setAutoDownload] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("added");
   const [sortDesc, setSortDesc] = useState(true);
+  const [urlOpen, setUrlOpen] = useState(false);
+  const [urlValue, setUrlValue] = useState("");
+  const [urlLoading, setUrlLoading] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
@@ -349,6 +358,35 @@ function ConverterPage() {
     toast.success("Sample XML loaded");
   }, [addFiles]);
 
+  const fetchFromUrl = useCallback(async () => {
+    const url = urlValue.trim();
+    if (!url) return;
+    setUrlLoading(true);
+    log("info", `GET ${url}`);
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      if (!/<\?xml|<[a-zA-Z]/.test(text.trim().slice(0, 200))) {
+        throw new Error("response does not look like XML");
+      }
+      const name = url.split("/").pop()?.split("?")[0] || `fetched-${Date.now()}.xml`;
+      const safe = name.toLowerCase().endsWith(".xml") ? name : `${name}.xml`;
+      const file = new File([text], safe, { type: "application/xml" });
+      await addFiles([file]);
+      toast.success(`Fetched ${safe}`);
+      setUrlOpen(false);
+      setUrlValue("");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log("err", `fetch failed: ${msg}`);
+      toast.error(`Fetch failed: ${msg}`);
+    } finally {
+      setUrlLoading(false);
+    }
+  }, [urlValue, addFiles, log]);
+
+
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
@@ -371,6 +409,26 @@ function ConverterPage() {
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   }, [addFiles]);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "?" || (e.shiftKey && e.key === "/")) {
+        e.preventDefault();
+        setShortcutsOpen((s) => !s);
+      } else if (e.key.toLowerCase() === "u" && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        inputRef.current?.click();
+      } else if (e.key.toLowerCase() === "l" && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setUrlOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const removeJob = (id: string) => {
     setJobs((js) => js.filter((j) => j.id !== id));
@@ -446,6 +504,39 @@ function ConverterPage() {
       kind: "json",
     });
     log("ok", `↓ ${name} (${fmtBytes(blob.size)})`);
+  };
+
+  const downloadOneTsv = (j: FileJob) => {
+    if (!j.result) return;
+    const cols = j.result.columns;
+    const escTsv = (v: string) =>
+      (v ?? "").toString().replace(/\t/g, " ").replace(/\r?\n/g, " ");
+    const lines = [cols.map(escTsv).join("\t")];
+    for (const r of j.result.rows) lines.push(cols.map((c) => escTsv(r[c] ?? "")).join("\t"));
+    const blob = new Blob([lines.join("\n")], { type: "text/tab-separated-values;charset=utf-8" });
+    const name = j.name.replace(/\.xml$/i, "") + ".tsv";
+    triggerDownload(blob, name);
+    recordHistory({
+      id: j.id + "-tsv-" + Date.now(),
+      name,
+      records: j.result.recordCount,
+      columns: cols.length,
+      bytes: blob.size,
+      at: Date.now(),
+      kind: "csv",
+    });
+    log("ok", `↓ ${name} (${fmtBytes(blob.size)})`);
+  };
+
+  const copyCsv = async (j: FileJob) => {
+    if (!j.csv) return;
+    try {
+      await navigator.clipboard.writeText(j.csv);
+      toast.success(`Copied ${j.name.replace(/\.xml$/i, "")}.csv to clipboard`);
+      log("ok", `clipboard ← ${j.name}`);
+    } catch {
+      toast.error("Clipboard unavailable");
+    }
   };
 
   const downloadCombined = () => {
@@ -629,11 +720,20 @@ function ConverterPage() {
                 <DropdownMenuItem onClick={retryErrors} className="font-mono text-xs">
                   <RefreshCw className="size-3.5 mr-2" /> retry errors
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setShortcutsOpen(true)} className="font-mono text-xs">
+                  <Keyboard className="size-3.5 mr-2" /> keyboard shortcuts
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild className="font-mono text-xs">
+                  <Link to="/about"><Info className="size-3.5 mr-2" /> about / features</Link>
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => { setHistory([]); toast.success("History cleared"); }} className="font-mono text-xs">
                   <Trash2 className="size-3.5 mr-2" /> clear history
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <Button asChild variant="outline" size="icon" className="size-9" title="about">
+              <Link to="/about"><Info className="size-4" /></Link>
+            </Button>
             <Button
               variant="outline"
               size="icon"
@@ -682,7 +782,7 @@ function ConverterPage() {
                 <span className="cursor-blink" />
               </p>
               <p className="text-xs text-muted-foreground mt-2">
-                bulk upload · auto-detect · parallel parse · type inference · streaming
+                bulk upload · auto-detect · parallel parse · type inference · streaming · press <span className="text-primary">?</span> for shortcuts
               </p>
             </div>
           </section>
@@ -716,6 +816,9 @@ function ConverterPage() {
                 </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <Button variant="outline" size="sm" onClick={() => setUrlOpen(true)} className="gap-2">
+              <Link2 className="size-4" /> fetch url
+            </Button>
             <Button variant="default" size="sm" onClick={downloadZip}
               disabled={converting || stats.ready === 0} className="gap-2">
               {converting ? <Loader2 className="size-4 animate-spin" /> : <Archive className="size-4" />}
@@ -767,6 +870,8 @@ function ConverterPage() {
                     onPreview={() => { setPreviewSearch(""); setPreview(j); }}
                     onDownload={() => downloadOne(j)}
                     onDownloadJson={() => downloadOneJson(j)}
+                    onDownloadTsv={() => downloadOneTsv(j)}
+                    onCopy={() => copyCsv(j)}
                     onRemove={() => removeJob(j.id)}
                   />
                 ))}
@@ -908,6 +1013,12 @@ function ConverterPage() {
                   {Math.min(20, preview.result.columns.length)}/{preview.result.columns.length} cols
                 </span>
                 <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => copyCsv(preview)} className="gap-2">
+                    <Copy className="size-3.5" /> copy
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => downloadOneTsv(preview)} className="gap-2">
+                    <FileText className="size-3.5" /> tsv
+                  </Button>
                   <Button size="sm" variant="outline" onClick={() => downloadOneJson(preview)} className="gap-2">
                     <FileJson className="size-3.5" /> json
                   </Button>
@@ -920,17 +1031,78 @@ function ConverterPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Fetch URL dialog */}
+      <Dialog open={urlOpen} onOpenChange={setUrlOpen}>
+        <DialogContent className="max-w-lg bg-card border-border">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm font-mono">
+              <Link2 className="size-4 text-primary" /> fetch xml from url
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Paste an http(s) URL pointing to an XML feed, sitemap, or RSS.
+            </p>
+            <Input
+              autoFocus
+              placeholder="https://example.com/feed.xml"
+              value={urlValue}
+              onChange={(e) => setUrlValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") fetchFromUrl(); }}
+              className="font-mono text-xs"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setUrlOpen(false)}>cancel</Button>
+              <Button size="sm" onClick={fetchFromUrl} disabled={urlLoading || !urlValue.trim()} className="gap-2">
+                {urlLoading ? <Loader2 className="size-4 animate-spin" /> : <Link2 className="size-4" />}
+                fetch
+              </Button>
+            </div>
+            <p className="text-[10px] text-muted-foreground font-mono">
+              note: the remote server must allow CORS, otherwise the browser blocks the request.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Keyboard shortcuts dialog */}
+      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent className="max-w-md bg-card border-border">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm font-mono">
+              <Keyboard className="size-4 text-primary" /> keyboard shortcuts
+            </DialogTitle>
+          </DialogHeader>
+          <ul className="text-xs font-mono space-y-2">
+            {[
+              ["U", "open file picker"],
+              ["L", "fetch from URL"],
+              ["⌘V / Ctrl+V", "paste XML from clipboard"],
+              ["?", "toggle this shortcut sheet"],
+              ["Esc", "close dialog"],
+            ].map(([k, d]) => (
+              <li key={k} className="flex items-center justify-between gap-3 border-b border-border/50 pb-2 last:border-0">
+                <kbd className="px-2 py-1 rounded bg-muted text-foreground border border-border text-[11px]">{k}</kbd>
+                <span className="text-muted-foreground">{d}</span>
+              </li>
+            ))}
+          </ul>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
 function JobRow({
-  job, onPreview, onDownload, onDownloadJson, onRemove,
+  job, onPreview, onDownload, onDownloadJson, onDownloadTsv, onCopy, onRemove,
 }: {
   job: FileJob;
   onPreview: () => void;
   onDownload: () => void;
   onDownloadJson: () => void;
+  onDownloadTsv: () => void;
+  onCopy: () => void;
   onRemove: () => void;
 }) {
   const statusColor = {
@@ -981,6 +1153,12 @@ function JobRow({
             <>
               <Button size="icon" variant="ghost" onClick={onPreview} title="preview">
                 <Eye className="size-4" />
+              </Button>
+              <Button size="icon" variant="ghost" onClick={onCopy} title="copy csv to clipboard">
+                <Copy className="size-4" />
+              </Button>
+              <Button size="icon" variant="ghost" onClick={onDownloadTsv} title="download tsv">
+                <FileText className="size-4" />
               </Button>
               <Button size="icon" variant="ghost" onClick={onDownloadJson} title="download json">
                 <FileJson className="size-4" />
